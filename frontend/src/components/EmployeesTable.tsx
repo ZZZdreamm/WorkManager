@@ -6,9 +6,11 @@ import { StatusBadge } from './StatusBadge';
 
 interface Props {
   employees: Employee[];
+  onEdit: (employee: Employee) => void;
+  onDelete: (employee: Employee) => void;
 }
 
-export function EmployeesTable({ employees }: Props) {
+export function EmployeesTable({ employees, onEdit, onDelete }: Props) {
   if (employees.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-gray-300 bg-white p-10 text-center text-sm text-gray-500">
@@ -28,6 +30,7 @@ export function EmployeesTable({ employees }: Props) {
             <th className="px-4 py-2 font-medium text-right">Rate / h</th>
             <th className="px-4 py-2 font-medium text-right">Hours</th>
             <th className="px-4 py-2 font-medium">Status</th>
+            <th className="px-4 py-2 font-medium text-right">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
@@ -46,6 +49,22 @@ export function EmployeesTable({ employees }: Props) {
               </td>
               <td className="px-4 py-2">
                 <StatusBadge status={e.status} />
+              </td>
+              <td className="px-4 py-2 text-right">
+                <button
+                  type="button"
+                  onClick={() => onEdit(e)}
+                  className="mr-2 text-blue-600 hover:underline"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(e)}
+                  className="text-red-600 hover:underline"
+                >
+                  Delete
+                </button>
               </td>
             </tr>
           ))}

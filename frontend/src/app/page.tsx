@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { employeesApi } from '@/lib/api';
-import type { Employee, EmployeeStatus } from '@/types/employee';
+import type { Employee, EmployeePayload, EmployeeStatus } from '@/types/employee';
 import { Filters } from '@/components/Filters';
 import { EmployeesTable } from '@/components/EmployeesTable';
+import { Modal } from '@/components/Modal';
+import { EmployeeForm } from '@/components/EmployeeForm';
 
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -13,6 +15,9 @@ export default function EmployeesPage() {
 
   const [projectFilter, setProjectFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<EmployeeStatus | ''>('');
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<Employee | null>(null);
 
   const loadEmployees = useCallback(async () => {
     setLoading(true);
@@ -40,13 +45,57 @@ export default function EmployeesPage() {
     return Array.from(set).sort();
   }, [employees]);
 
+  const openCreate = () => {
+    setEditing(null);
+    setFormOpen(true);
+  };
+
+  const openEdit = (employee: Employee) => {
+    setEditing(employee);
+    setFormOpen(true);
+  };
+
+  const closeForm = () => setFormOpen(false);
+
+  async function handleSubmit(payload: EmployeePayload) {
+    if (editing) {
+      await employeesApi.update(editing.id, payload);
+    } else {
+      await employeesApi.create(payload);
+    }
+    setFormOpen(false);
+    await loadEmployees();
+  }
+
+  async function handleDelete(employee: Employee) {
+    const ok = window.confirm(
+      `Delete ${employee.firstName} ${employee.lastName}?`,
+    );
+    if (!ok) return;
+    try {
+      await employeesApi.remove(employee.id);
+      await loadEmployees();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Failed to delete.');
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Employees</h2>
-        <p className="mt-1 text-sm text-gray-500">
-          Manage outsourced employees and project cost.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold tracking-tight">Employees</h2>
+          <p className="mt-1 text-sm text-gray-500">
+            Manage outsourced employees and project cost.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={openCreate}
+          className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          + New employee
+        </button>
       </div>
 
       <Filters
@@ -72,8 +121,24 @@ export default function EmployeesPage() {
           Loading…
         </div>
       ) : (
-        <EmployeesTable employees={employees} />
+        <EmployeesTable
+          employees={employees}
+          onEdit={openEdit}
+          onDelete={handleDelete}
+        />
       )}
+
+      <Modal
+        open={formOpen}
+        title={editing ? 'Edit employee' : 'New employee'}
+        onClose={closeForm}
+      >
+        <EmployeeForm
+          initial={editing}
+          onCancel={closeForm}
+          onSubmit={handleSubmit}
+        />
+      </Modal>
     </div>
   );
 }
