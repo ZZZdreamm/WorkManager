@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
+}
+
+model Employee {
+  id          String         @id @default(uuid())
+  firstName   String
+  lastName    String
+  position    String
+  project     String
+  hourlyRate  Decimal        @db.Decimal(10, 2)
+  hoursWorked Int            @default(0)
+  status      EmployeeStatus @default(ACTIVE)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([project])
+  @@index([status])
+}
