@@ -2,11 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { employeesApi } from '@/lib/api';
-import type { Employee, EmployeePayload, EmployeeStatus } from '@/types/employee';
+import type {
+  Employee,
+  EmployeePayload,
+  EmployeeStatus,
+  ProjectSummary,
+} from '@/types/employee';
 import { Filters } from '@/components/Filters';
 import { EmployeesTable } from '@/components/EmployeesTable';
 import { Modal } from '@/components/Modal';
 import { EmployeeForm } from '@/components/EmployeeForm';
+import { ProjectSummaryCard } from '@/components/ProjectSummaryCard';
 
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -18,6 +24,10 @@ export default function EmployeesPage() {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
+
+  const [summary, setSummary] = useState<ProjectSummary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
 
   const loadEmployees = useCallback(async () => {
     setLoading(true);
@@ -38,6 +48,35 @@ export default function EmployeesPage() {
   useEffect(() => {
     void loadEmployees();
   }, [loadEmployees]);
+
+  useEffect(() => {
+    if (!projectFilter) {
+      setSummary(null);
+      setSummaryError(null);
+      return;
+    }
+    let cancelled = false;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    employeesApi
+      .summary(projectFilter)
+      .then((data) => {
+        if (!cancelled) setSummary(data);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setSummaryError(
+            err instanceof Error ? err.message : 'Failed to load summary.',
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSummaryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectFilter, employees]);
 
   const projects = useMemo(() => {
     const set = new Set<string>();
@@ -108,6 +147,12 @@ export default function EmployeesPage() {
           setProjectFilter('');
           setStatusFilter('');
         }}
+      />
+
+      <ProjectSummaryCard
+        loading={summaryLoading}
+        error={summaryError}
+        summary={summary}
       />
 
       {listError && (
