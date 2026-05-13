@@ -1,14 +1,23 @@
-import { NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { EmployeeStatus, Prisma } from '@prisma/client';
 import { EmployeesService } from './employees.service';
 
 type PrismaMock = {
   employee: {
     findMany: jest.Mock;
-    findUnique: jest.Mock;
+    findFirst: jest.Mock;
+    count: jest.Mock;
     create: jest.Mock;
     update: jest.Mock;
-    delete: jest.Mock;
+  };
+  project: {
+    findFirst: jest.Mock;
+  };
+  timeEntry: {
+    findMany: jest.Mock;
   };
 };
 
@@ -16,231 +25,336 @@ function makePrismaMock(): PrismaMock {
   return {
     employee: {
       findMany: jest.fn(),
-      findUnique: jest.fn(),
+      findFirst: jest.fn(),
+      count: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
-      delete: jest.fn(),
     },
+    project: { findFirst: jest.fn() },
+    timeEntry: { findMany: jest.fn() },
+  };
+}
+
+function makeAuditMock() {
+  return {
+    recordCreate: jest.fn().mockResolvedValue(undefined),
+    recordUpdate: jest.fn().mockResolvedValue(undefined),
+    recordDelete: jest.fn().mockResolvedValue(undefined),
   };
 }
 
 describe('EmployeesService', () => {
   describe('calculateSummary (pure)', () => {
-    it('returns zeros for empty project', () => {
-      const result = EmployeesService.calculateSummary('Phantom', []);
+    it('returns zeros when there are no entries', () => {
+      const result = EmployeesService.calculateSummary(
+        { id: 'p1', name: 'Phantom' },
+        [],
+      );
       expect(result).toEqual({
-        project: 'Phantom',
+        projectId: 'p1',
+        projectName: 'Phantom',
+        from: null,
+        to: null,
         employeeCount: 0,
         totalHours: 0,
         totalCost: 0,
       });
     });
 
-    it('sums hours and multiplies by hourly rate with two decimals', () => {
-      const result = EmployeesService.calculateSummary('WorkFlex Portal', [
-        { hourlyRate: new Prisma.Decimal('180.00'), hoursWorked: 120 },
-        { hourlyRate: new Prisma.Decimal('160.00'), hoursWorked: 140 },
-        { hourlyRate: new Prisma.Decimal('140.00'), hoursWorked: 60 },
-      ]);
+    it('sums hours and multiplies by employee rate, deduplicating employees', () => {
+      const result = EmployeesService.calculateSummary(
+        { id: 'p1', name: 'WorkFlex Portal' },
+        [
+          {
+            hours: new Prisma.Decimal('40'),
+            employee: { id: 'e1', hourlyRate: new Prisma.Decimal('180.00') },
+          },
+          {
+            hours: new Prisma.Decimal('80'),
+            employee: { id: 'e1', hourlyRate: new Prisma.Decimal('180.00') },
+          },
+          {
+            hours: new Prisma.Decimal('140'),
+            employee: { id: 'e2', hourlyRate: new Prisma.Decimal('160.00') },
+          },
+        ],
+      );
 
-      expect(result.employeeCount).toBe(3);
-      expect(result.totalHours).toBe(120 + 140 + 60);
-      expect(result.totalCost).toBe(180 * 120 + 160 * 140 + 140 * 60);
+      expect(result.employeeCount).toBe(2);
+      expect(result.totalHours).toBe(40 + 80 + 140);
+      expect(result.totalCost).toBe(180 * (40 + 80) + 160 * 140);
     });
 
-    it('keeps precision on fractional rates that would break with floats', () => {
-      const result = EmployeesService.calculateSummary('Edge', [
-        { hourlyRate: new Prisma.Decimal('0.10'), hoursWorked: 3 },
-        { hourlyRate: new Prisma.Decimal('0.20'), hoursWorked: 1 },
-      ]);
-
-      expect(result.totalCost).toBe(0.5);
+    it('keeps precision on fractional values', () => {
+      const result = EmployeesService.calculateSummary(
+        { id: 'p1', name: 'Edge' },
+        [
+          {
+            hours: '0.10',
+            employee: { id: 'e1', hourlyRate: '50.00' },
+          },
+          {
+            hours: '0.20',
+            employee: { id: 'e1', hourlyRate: '50.00' },
+          },
+        ],
+      );
+      expect(result.totalCost).toBe(0.3 * 50);
     });
 
-    it('accepts hourlyRate provided as string or number', () => {
-      const result = EmployeesService.calculateSummary('Mixed', [
-        { hourlyRate: '50.50', hoursWorked: 2 },
-        { hourlyRate: 25 as unknown as Prisma.Decimal, hoursWorked: 4 },
-      ]);
-
-      expect(result.totalCost).toBe(50.5 * 2 + 25 * 4);
+    it('forwards the supplied date range into the response', () => {
+      const result = EmployeesService.calculateSummary(
+        { id: 'p1', name: 'Ranged' },
+        [],
+        { from: '2026-04-01', to: '2026-04-30' },
+      );
+      expect(result.from).toBe('2026-04-01');
+      expect(result.to).toBe('2026-04-30');
     });
   });
 
   describe('list', () => {
-    it('builds a case-insensitive project filter and orders by name', async () => {
+    it('always excludes soft-deleted rows and paginates', async () => {
       const prisma = makePrismaMock();
       prisma.employee.findMany.mockResolvedValue([]);
-      const service = new EmployeesService(prisma as never);
+      prisma.employee.count.mockResolvedValue(0);
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
 
-      await service.list({ project: 'WorkFlex Portal' });
+      const result = await service.list({
+        projectId: undefined,
+        status: undefined,
+        page: 2,
+        limit: 5,
+      } as never);
 
-      expect(prisma.employee.findMany).toHaveBeenCalledWith({
-        where: {
-          project: { equals: 'WorkFlex Portal', mode: 'insensitive' },
-        },
-        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      const call = prisma.employee.findMany.mock.calls[0][0];
+      expect(call.where).toEqual({ deletedAt: null });
+      expect(call.skip).toBe(5);
+      expect(call.take).toBe(5);
+      expect(result.page).toBe(2);
+      expect(result.limit).toBe(5);
+    });
+
+    it('applies project and status filters when given', async () => {
+      const prisma = makePrismaMock();
+      prisma.employee.findMany.mockResolvedValue([]);
+      prisma.employee.count.mockResolvedValue(0);
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
+
+      await service.list({
+        projectId: '11111111-1111-1111-1111-111111111111',
+        status: EmployeeStatus.ACTIVE,
+        page: 1,
+        limit: 20,
+      } as never);
+
+      const call = prisma.employee.findMany.mock.calls[0][0];
+      expect(call.where).toEqual({
+        deletedAt: null,
+        projectId: '11111111-1111-1111-1111-111111111111',
+        status: EmployeeStatus.ACTIVE,
       });
     });
 
-    it('passes status filter through when provided', async () => {
+    it('falls back to default ordering when sort is missing', async () => {
       const prisma = makePrismaMock();
       prisma.employee.findMany.mockResolvedValue([]);
-      const service = new EmployeesService(prisma as never);
+      prisma.employee.count.mockResolvedValue(0);
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
 
-      await service.list({ status: EmployeeStatus.ACTIVE });
+      await service.list({ page: 1, limit: 20 } as never);
 
-      expect(prisma.employee.findMany).toHaveBeenCalledWith({
-        where: { status: EmployeeStatus.ACTIVE },
-        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-      });
+      const call = prisma.employee.findMany.mock.calls[0][0];
+      expect(call.orderBy).toEqual([
+        { lastName: 'asc' },
+        { firstName: 'asc' },
+      ]);
     });
 
-    it('uses an empty where clause when no filters are given', async () => {
+    it('honours a whitelisted sort param', async () => {
       const prisma = makePrismaMock();
       prisma.employee.findMany.mockResolvedValue([]);
-      const service = new EmployeesService(prisma as never);
+      prisma.employee.count.mockResolvedValue(0);
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
 
-      await service.list({});
+      await service.list({ page: 1, limit: 20, sort: 'hourlyRate:desc' } as never);
 
-      expect(prisma.employee.findMany).toHaveBeenCalledWith({
-        where: {},
-        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-      });
+      const call = prisma.employee.findMany.mock.calls[0][0];
+      expect(call.orderBy).toEqual([{ hourlyRate: 'desc' }]);
     });
   });
 
   describe('findOne', () => {
-    it('throws NotFoundException when no employee matches', async () => {
+    it('throws NotFoundException when missing or soft-deleted', async () => {
       const prisma = makePrismaMock();
-      prisma.employee.findUnique.mockResolvedValue(null);
-      const service = new EmployeesService(prisma as never);
+      prisma.employee.findFirst.mockResolvedValue(null);
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
 
       await expect(service.findOne('missing-id')).rejects.toBeInstanceOf(
         NotFoundException,
       );
-    });
-
-    it('returns the matched employee', async () => {
-      const prisma = makePrismaMock();
-      const employee = { id: 'e1', firstName: 'Anna' };
-      prisma.employee.findUnique.mockResolvedValue(employee);
-      const service = new EmployeesService(prisma as never);
-
-      await expect(service.findOne('e1')).resolves.toBe(employee);
-      expect(prisma.employee.findUnique).toHaveBeenCalledWith({
-        where: { id: 'e1' },
+      expect(prisma.employee.findFirst).toHaveBeenCalledWith({
+        where: { id: 'missing-id', deletedAt: null },
+        include: expect.any(Object),
       });
     });
   });
 
   describe('create', () => {
-    it('trims string fields and passes a Decimal hourly rate', async () => {
+    it('rejects when the referenced project does not exist', async () => {
       const prisma = makePrismaMock();
+      prisma.project.findFirst.mockResolvedValue(null);
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
+
+      await expect(
+        service.create({
+          firstName: 'Jan',
+          lastName: 'Nowak',
+          email: 'jan@workflex.pl',
+          position: 'Dev',
+          projectId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          hourlyRate: 150,
+          status: EmployeeStatus.ACTIVE,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.employee.create).not.toHaveBeenCalled();
+    });
+
+    it('lowercases the email, trims strings, writes an audit entry', async () => {
+      const prisma = makePrismaMock();
+      prisma.project.findFirst.mockResolvedValue({ id: 'p1' });
       prisma.employee.create.mockImplementation(({ data }) =>
-        Promise.resolve({ id: 'new', ...data }),
+        Promise.resolve({ id: 'e1', ...data }),
       );
-      const service = new EmployeesService(prisma as never);
+      const audit = makeAuditMock();
+      const service = new EmployeesService(prisma as never, audit as never);
 
       await service.create({
         firstName: '  Jan ',
         lastName: ' Nowak',
+        email: 'Jan.Nowak@WorkFlex.PL',
         position: ' Developer ',
-        project: ' WorkFlex ',
+        projectId: 'p1',
         hourlyRate: 150,
-        hoursWorked: 40,
         status: EmployeeStatus.ACTIVE,
       });
 
-      const call = prisma.employee.create.mock.calls[0][0];
-      expect(call.data.firstName).toBe('Jan');
-      expect(call.data.lastName).toBe('Nowak');
-      expect(call.data.position).toBe('Developer');
-      expect(call.data.project).toBe('WorkFlex');
-      expect(call.data.hourlyRate).toBeInstanceOf(Prisma.Decimal);
-      expect((call.data.hourlyRate as Prisma.Decimal).toString()).toBe('150');
-      expect(call.data.hoursWorked).toBe(40);
-      expect(call.data.status).toBe(EmployeeStatus.ACTIVE);
-    });
-  });
-
-  describe('update', () => {
-    it('rejects updates for non-existing employees before touching Prisma update', async () => {
-      const prisma = makePrismaMock();
-      prisma.employee.findUnique.mockResolvedValue(null);
-      const service = new EmployeesService(prisma as never);
-
-      await expect(
-        service.update('nope', { firstName: 'X' }),
-      ).rejects.toBeInstanceOf(NotFoundException);
-
-      expect(prisma.employee.update).not.toHaveBeenCalled();
-    });
-
-    it('only sends provided fields and skips undefined ones', async () => {
-      const prisma = makePrismaMock();
-      prisma.employee.findUnique.mockResolvedValue({ id: 'e1' });
-      prisma.employee.update.mockResolvedValue({ id: 'e1' });
-      const service = new EmployeesService(prisma as never);
-
-      await service.update('e1', { hourlyRate: 200, status: EmployeeStatus.ON_LEAVE });
-
-      const call = prisma.employee.update.mock.calls[0][0];
-      expect(call.where).toEqual({ id: 'e1' });
-      expect(Object.keys(call.data).sort()).toEqual(['hourlyRate', 'status']);
-      expect((call.data.hourlyRate as Prisma.Decimal).toString()).toBe('200');
-      expect(call.data.status).toBe(EmployeeStatus.ON_LEAVE);
+      const data = prisma.employee.create.mock.calls[0][0].data;
+      expect(data.firstName).toBe('Jan');
+      expect(data.lastName).toBe('Nowak');
+      expect(data.email).toBe('jan.nowak@workflex.pl');
+      expect(data.position).toBe('Developer');
+      expect(data.projectId).toBe('p1');
+      expect((data.hourlyRate as Prisma.Decimal).toString()).toBe('150');
+      expect(audit.recordCreate).toHaveBeenCalledWith(
+        'Employee',
+        'e1',
+        expect.any(Object),
+      );
     });
   });
 
   describe('remove', () => {
-    it('throws when employee does not exist', async () => {
+    it('soft-deletes by setting deletedAt and writes an audit entry', async () => {
       const prisma = makePrismaMock();
-      prisma.employee.findUnique.mockResolvedValue(null);
-      const service = new EmployeesService(prisma as never);
-
-      await expect(service.remove('nope')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
-      expect(prisma.employee.delete).not.toHaveBeenCalled();
-    });
-
-    it('deletes when employee exists', async () => {
-      const prisma = makePrismaMock();
-      prisma.employee.findUnique.mockResolvedValue({ id: 'e1' });
-      prisma.employee.delete.mockResolvedValue({ id: 'e1' });
-      const service = new EmployeesService(prisma as never);
+      const employee = { id: 'e1', firstName: 'X', lastName: 'Y' };
+      prisma.employee.findFirst.mockResolvedValue(employee);
+      prisma.employee.update.mockResolvedValue({ ...employee, deletedAt: new Date() });
+      const audit = makeAuditMock();
+      const service = new EmployeesService(prisma as never, audit as never);
 
       await service.remove('e1');
-      expect(prisma.employee.delete).toHaveBeenCalledWith({
-        where: { id: 'e1' },
-      });
+
+      const updateCall = prisma.employee.update.mock.calls[0][0];
+      expect(updateCall.where).toEqual({ id: 'e1' });
+      expect(updateCall.data.deletedAt).toBeInstanceOf(Date);
+      expect(audit.recordDelete).toHaveBeenCalledWith(
+        'Employee',
+        'e1',
+        employee,
+      );
     });
   });
 
   describe('projectSummary', () => {
-    it('queries Prisma case-insensitively and projects the right shape', async () => {
+    it('rejects unknown projects with NotFoundException', async () => {
       const prisma = makePrismaMock();
-      prisma.employee.findMany.mockResolvedValue([
-        { hourlyRate: new Prisma.Decimal('100'), hoursWorked: 10 },
-        { hourlyRate: new Prisma.Decimal('200'), hoursWorked: 5 },
-      ]);
-      const service = new EmployeesService(prisma as never);
+      prisma.project.findFirst.mockResolvedValue(null);
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
 
-      const result = await service.projectSummary('WorkFlex Portal');
+      await expect(
+        service.projectSummary({
+          projectId: '00000000-0000-0000-0000-000000000000',
+        } as never),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
 
-      expect(prisma.employee.findMany).toHaveBeenCalledWith({
-        where: {
-          project: { equals: 'WorkFlex Portal', mode: 'insensitive' },
+    it('rejects when from is after to', async () => {
+      const prisma = makePrismaMock();
+      prisma.project.findFirst.mockResolvedValue({ id: 'p1', name: 'X' });
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
+
+      await expect(
+        service.projectSummary({
+          projectId: 'p1',
+          from: '2026-05-01',
+          to: '2026-04-01',
+        } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('aggregates hours and cost from time entries within the date range', async () => {
+      const prisma = makePrismaMock();
+      prisma.project.findFirst.mockResolvedValue({
+        id: 'p1',
+        name: 'WorkFlex Portal',
+      });
+      prisma.timeEntry.findMany.mockResolvedValue([
+        {
+          hours: new Prisma.Decimal('40'),
+          employee: { id: 'e1', hourlyRate: new Prisma.Decimal('180') },
         },
-        select: { hourlyRate: true, hoursWorked: true },
-      });
-      expect(result).toEqual({
-        project: 'WorkFlex Portal',
-        employeeCount: 2,
-        totalHours: 15,
-        totalCost: 100 * 10 + 200 * 5,
-      });
+        {
+          hours: new Prisma.Decimal('40'),
+          employee: { id: 'e1', hourlyRate: new Prisma.Decimal('180') },
+        },
+        {
+          hours: new Prisma.Decimal('80'),
+          employee: { id: 'e2', hourlyRate: new Prisma.Decimal('160') },
+        },
+      ]);
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
+
+      const result = await service.projectSummary({
+        projectId: 'p1',
+        from: '2026-04-01',
+        to: '2026-04-30',
+      } as never);
+
+      const call = prisma.timeEntry.findMany.mock.calls[0][0];
+      expect(call.where.projectId).toBe('p1');
+      expect(call.where.employee).toEqual({ deletedAt: null });
+      expect(call.where.date.gte).toBeInstanceOf(Date);
+      expect(call.where.date.lte).toBeInstanceOf(Date);
+
+      expect(result.employeeCount).toBe(2);
+      expect(result.totalHours).toBe(160);
+      expect(result.totalCost).toBe(180 * 80 + 160 * 80);
+      expect(result.from).toBe('2026-04-01');
+      expect(result.to).toBe('2026-04-30');
+    });
+
+    it('skips the date filter when neither bound is supplied', async () => {
+      const prisma = makePrismaMock();
+      prisma.project.findFirst.mockResolvedValue({ id: 'p1', name: 'P' });
+      prisma.timeEntry.findMany.mockResolvedValue([]);
+      const service = new EmployeesService(prisma as never, makeAuditMock() as never);
+
+      await service.projectSummary({ projectId: 'p1' } as never);
+
+      const where = prisma.timeEntry.findMany.mock.calls[0][0].where;
+      expect(where.date).toBeUndefined();
     });
   });
 });
