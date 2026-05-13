@@ -28,7 +28,7 @@ export class EmployeesController {
 
   @Get('summary')
   summary(@Query() query: SummaryQuery) {
-    return this.employees.projectSummary(query.project);
+    return this.employees.projectSummary(query);
   }
 
   @Get(':id')

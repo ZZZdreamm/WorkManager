@@ -1,8 +1,14 @@
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsDateString, IsOptional, IsUUID } from 'class-validator';
 
 export class SummaryQuery {
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(120)
-  project!: string;
+  @IsUUID()
+  projectId!: string;
+
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @IsOptional()
+  @IsDateString()
+  to?: string;
 }

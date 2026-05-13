@@ -1,107 +1,184 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { Employee, EmployeeStatus, Prisma } from '@prisma/client';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Employee, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditService } from '../common/audit/audit.service';
+import {
+  PaginatedResult,
+  buildOrderBy,
+  paginate,
+} from '../common/pagination/pagination.dto';
+import { rethrowConflict } from '../common/errors/prisma-error';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { ListEmployeesQuery } from './dto/list-employees.query';
+import { SummaryQuery } from './dto/summary.query';
+
+const INCLUDE_PROJECT = {
+  project: { select: { id: true, name: true, status: true } },
+} as const;
+
+type EmployeeWithProject = Prisma.EmployeeGetPayload<{
+  include: typeof INCLUDE_PROJECT;
+}>;
 
 export interface ProjectSummary {
-  project: string;
+  projectId: string;
+  projectName: string;
+  from: string | null;
+  to: string | null;
   employeeCount: number;
   totalHours: number;
   totalCost: number;
 }
 
+const SORTABLE = [
+  'lastName',
+  'firstName',
+  'hourlyRate',
+  'createdAt',
+  'status',
+] as const;
+
 @Injectable()
 export class EmployeesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
-  list(query: ListEmployeesQuery): Promise<Employee[]> {
-    const where: Prisma.EmployeeWhereInput = {};
-    if (query.project) {
-      where.project = { equals: query.project, mode: 'insensitive' };
-    }
-    if (query.status) {
-      where.status = query.status;
-    }
-    return this.prisma.employee.findMany({
-      where,
-      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-    });
+  async list(
+    query: ListEmployeesQuery,
+  ): Promise<PaginatedResult<EmployeeWithProject>> {
+    const where: Prisma.EmployeeWhereInput = { deletedAt: null };
+    if (query.projectId) where.projectId = query.projectId;
+    if (query.status) where.status = query.status;
+
+    const orderBy = buildOrderBy(query.sort, SORTABLE, [
+      { lastName: 'asc' },
+      { firstName: 'asc' },
+    ]);
+    const [data, total] = await Promise.all([
+      this.prisma.employee.findMany({
+        where,
+        orderBy,
+        skip: (query.page - 1) * query.limit,
+        take: query.limit,
+        include: INCLUDE_PROJECT,
+      }),
+      this.prisma.employee.count({ where }),
+    ]);
+    return paginate(data, total, query.page, query.limit);
   }
 
-  async findOne(id: string): Promise<Employee> {
-    const employee = await this.prisma.employee.findUnique({ where: { id } });
-    if (!employee) {
-      throw new NotFoundException(`Employee ${id} not found`);
-    }
+  async findOne(id: string): Promise<EmployeeWithProject> {
+    const employee = await this.prisma.employee.findFirst({
+      where: { id, deletedAt: null },
+      include: INCLUDE_PROJECT,
+    });
+    if (!employee) throw new NotFoundException(`Employee ${id} not found`);
     return employee;
   }
 
-  create(dto: CreateEmployeeDto): Promise<Employee> {
-    return this.prisma.employee.create({
-      data: {
-        firstName: dto.firstName.trim(),
-        lastName: dto.lastName.trim(),
-        position: dto.position.trim(),
-        project: dto.project.trim(),
-        hourlyRate: new Prisma.Decimal(dto.hourlyRate),
-        hoursWorked: dto.hoursWorked,
-        status: dto.status,
-      },
-    });
+  async create(dto: CreateEmployeeDto): Promise<EmployeeWithProject> {
+    await this.assertProjectExists(dto.projectId);
+    try {
+      const employee = await this.prisma.employee.create({
+        data: {
+          firstName: dto.firstName.trim(),
+          lastName: dto.lastName.trim(),
+          email: dto.email.trim().toLowerCase(),
+          position: dto.position.trim(),
+          projectId: dto.projectId,
+          hourlyRate: new Prisma.Decimal(dto.hourlyRate),
+          status: dto.status,
+        },
+        include: INCLUDE_PROJECT,
+      });
+      await this.audit.recordCreate('Employee', employee.id, employee);
+      return employee;
+    } catch (err) {
+      return rethrowConflict(err, (target) =>
+        target.includes('email')
+          ? 'Another employee already uses this email address.'
+          : 'Employee conflicts with an existing record.',
+      );
+    }
   }
 
-  async update(id: string, dto: UpdateEmployeeDto): Promise<Employee> {
-    await this.findOne(id);
+  async update(
+    id: string,
+    dto: UpdateEmployeeDto,
+  ): Promise<EmployeeWithProject> {
+    const before = await this.findOne(id);
+    if (dto.projectId && dto.projectId !== before.projectId) {
+      await this.assertProjectExists(dto.projectId);
+    }
+
     const data: Prisma.EmployeeUpdateInput = {};
     if (dto.firstName !== undefined) data.firstName = dto.firstName.trim();
     if (dto.lastName !== undefined) data.lastName = dto.lastName.trim();
+    if (dto.email !== undefined) data.email = dto.email.trim().toLowerCase();
     if (dto.position !== undefined) data.position = dto.position.trim();
-    if (dto.project !== undefined) data.project = dto.project.trim();
+    if (dto.projectId !== undefined) {
+      data.project = { connect: { id: dto.projectId } };
+    }
     if (dto.hourlyRate !== undefined) {
       data.hourlyRate = new Prisma.Decimal(dto.hourlyRate);
     }
-    if (dto.hoursWorked !== undefined) data.hoursWorked = dto.hoursWorked;
     if (dto.status !== undefined) data.status = dto.status;
 
-    return this.prisma.employee.update({ where: { id }, data });
+    try {
+      const after = await this.prisma.employee.update({
+        where: { id },
+        data,
+        include: INCLUDE_PROJECT,
+      });
+      await this.audit.recordUpdate('Employee', id, before, after);
+      return after;
+    } catch (err) {
+      return rethrowConflict(err, (target) =>
+        target.includes('email')
+          ? 'Another employee already uses this email address.'
+          : 'Employee conflicts with an existing record.',
+      );
+    }
   }
 
   async remove(id: string): Promise<void> {
-    await this.findOne(id);
-    await this.prisma.employee.delete({ where: { id } });
-  }
-
-  async projectSummary(project: string): Promise<ProjectSummary> {
-    const employees = await this.prisma.employee.findMany({
-      where: { project: { equals: project, mode: 'insensitive' } },
-      select: { hourlyRate: true, hoursWorked: true },
+    const before = await this.findOne(id);
+    await this.prisma.employee.update({
+      where: { id },
+      data: { deletedAt: new Date() },
     });
-
-    return EmployeesService.calculateSummary(project, employees);
+    await this.audit.recordDelete('Employee', id, before);
   }
 
-  static calculateSummary(
-    project: string,
-    employees: Array<{ hourlyRate: Prisma.Decimal | string | number; hoursWorked: number }>,
-  ): ProjectSummary {
-    let totalCost = new Prisma.Decimal(0);
-    let totalHours = 0;
-
-    for (const e of employees) {
-      const rate = new Prisma.Decimal(e.hourlyRate as Prisma.Decimal);
-      totalHours += e.hoursWorked;
-      totalCost = totalCost.plus(rate.mul(e.hoursWorked));
+  async projectSummary(query: SummaryQuery): Promise<ProjectSummary> {
+    const project = await this.prisma.project.findFirst({
+      where: { id: query.projectId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!project) {
+      throw new NotFoundException(`Project ${query.projectId} not found`);
     }
-
     return {
-      project,
-      employeeCount: employees.length,
-      totalHours,
-      totalCost: Number(totalCost.toFixed(2)),
+      projectId: project.id,
+      projectName: project.name,
+      from: query.from ?? null,
+      to: query.to ?? null,
+      employeeCount: 0,
+      totalHours: 0,
+      totalCost: 0,
     };
   }
 
-  static readonly _types = EmployeeStatus;
+  private async assertProjectExists(projectId: string) {
+    const exists = await this.prisma.project.findFirst({
+      where: { id: projectId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!exists) {
+      throw new BadRequestException(`Project ${projectId} not found.`);
+    }
+  }
 }

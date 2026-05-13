@@ -1,11 +1,11 @@
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEnum, IsOptional, IsUUID } from 'class-validator';
 import { EmployeeStatus } from '@prisma/client';
+import { PaginationQuery } from '../../common/pagination/pagination.dto';
 
-export class ListEmployeesQuery {
+export class ListEmployeesQuery extends PaginationQuery {
   @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  project?: string;
+  @IsUUID()
+  projectId?: string;
 
   @IsOptional()
   @IsEnum(EmployeeStatus)

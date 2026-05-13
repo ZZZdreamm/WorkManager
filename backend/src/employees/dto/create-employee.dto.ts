@@ -1,9 +1,10 @@
 import {
+  IsEmail,
   IsEnum,
-  IsInt,
   IsNotEmpty,
   IsNumber,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -22,27 +23,23 @@ export class CreateEmployeeDto {
   @MaxLength(80)
   lastName!: string;
 
+  @IsEmail()
+  @MaxLength(160)
+  email!: string;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
   position!: string;
 
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(120)
-  project!: string;
+  @IsUUID()
+  projectId!: string;
 
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   @Max(100000)
   hourlyRate!: number;
-
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  @Max(100000)
-  hoursWorked: number = 0;
 
   @IsEnum(EmployeeStatus)
   status: EmployeeStatus = EmployeeStatus.ACTIVE;

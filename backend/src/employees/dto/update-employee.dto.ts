@@ -1,10 +1,11 @@
 import {
+  IsEmail,
   IsEnum,
-  IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -26,16 +27,19 @@ export class UpdateEmployeeDto {
   lastName?: string;
 
   @IsOptional()
+  @IsEmail()
+  @MaxLength(160)
+  email?: string;
+
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
   position?: string;
 
   @IsOptional()
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(120)
-  project?: string;
+  @IsUUID()
+  projectId?: string;
 
   @IsOptional()
   @Type(() => Number)
@@ -43,13 +47,6 @@ export class UpdateEmployeeDto {
   @Min(0)
   @Max(100000)
   hourlyRate?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  @Max(100000)
-  hoursWorked?: number;
 
   @IsOptional()
   @IsEnum(EmployeeStatus)
