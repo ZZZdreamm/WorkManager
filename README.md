@@ -1,152 +1,131 @@
-# WorkFlex — Employees, Projects & Time tracking
-
-Mini-aplikacja do zarządzania pracownikami outsourcingowymi, projektami oraz
-ewidencją czasu pracy. Zadanie rekrutacyjne dla WorkFlex, rozszerzone o
-funkcjonalności z listy „co bym dorobił mając więcej czasu".
+# WorkFlex — pracownicy, projekty i ewidencja godzin
 
 ## Stack
 
-- **Backend** — NestJS 10 (TypeScript), Prisma 5, PostgreSQL 16,
-  `class-validator` + globalny `ValidationPipe`, Jest do testów jednostkowych.
-- **Frontend** — Next.js 14 (App Router, React 18, TypeScript), Tailwind CSS,
-  **SWR** do data fetching z optymistycznymi mutacjami.
-- **Infra (dev)** — Docker Compose dla bazy.
+- **Backend** — NestJS 10 + Prisma 5 + PostgreSQL 16. Walidacja przez `class-validator` + globalny `ValidationPipe` (whitelist + forbidNonWhitelisted). Jest do testów jednostkowych.
+- **Frontend** — Next.js 14 (App Router) + React 18 + TypeScript + Tailwind. **SWR** do data fetching z optymistycznymi mutacjami.
+- **Infra** — `docker-compose.yml` z Postgresem do developmentu.
 
 ```
 workmanager/
-├── backend/            NestJS + Prisma
+├── backend/
 │   ├── prisma/
 │   │   ├── schema.prisma
-│   │   ├── migrations/
-│   │   └── seed.ts
+│   │   ├── migrations/        jeden init z całym schematem
+│   │   └── seed.ts            3 projekty, 6 pracowników, 17 wpisów godzin
 │   └── src/
-│       ├── common/          pagination utility, audit service, error helpers
-│       ├── employees/       CRUD + summary
-│       ├── projects/        CRUD
-│       ├── time-entries/    CRUD
-│       ├── audit-log/       read-only listing of all changes
-│       └── prisma/
-├── frontend/           Next.js
+│       ├── common/
+│       │   ├── pagination/    wspólna paginacja + whitelist sortowania
+│       │   ├── audit/         AuditService używany przez wszystkie moduły
+│       │   └── errors/        helper do mapowania Prisma P2002 → 409
+│       ├── employees/         CRUD + summary
+│       ├── projects/          CRUD
+│       ├── time-entries/      CRUD
+│       ├── audit-log/         read-only listing wszystkich zmian
+│       └── prisma/            PrismaService
+├── frontend/
 │   └── src/
 │       ├── app/
-│       │   ├── page.tsx              employees + filters + summary
-│       │   ├── projects/page.tsx     projects CRUD
-│       │   └── time-entries/page.tsx time entries CRUD
+│       │   ├── page.tsx              pracownicy + filtry + summary
+│       │   ├── projects/page.tsx     projekty
+│       │   └── time-entries/page.tsx wpisy godzin
 │       ├── components/
 │       └── lib/
-│           ├── api.ts                typed fetch client
-│           ├── hooks.ts              SWR hooks
+│           ├── api.ts                typed fetch
+│           ├── hooks.ts              hooki SWR
 │           └── format.ts
-└── docker-compose.yml  PostgreSQL 16 dla developmentu
+└── docker-compose.yml
 ```
 
-## Wymagania
+## How to run
 
-- Node.js ≥ 18.18
-- Docker (do lokalnej Postgres) lub własna instancja PostgreSQL
-
-## Uruchomienie
-
-### 1. Baza danych
+Potrzebny Node ≥ 18.18 i Docker (albo własny Postgres — wtedy podmieniam `DATABASE_URL`).
 
 ```bash
+# 1) Baza
 docker compose up -d
-```
 
-Postaw `workflex-postgres` na porcie `5432` (user: `workflex`, pass: `workflex`,
-db: `workflex`).
-
-Jeśli wolisz własną Postgres, ustaw `DATABASE_URL` w `backend/.env`.
-
-### 2. Backend
-
-```bash
+# 2) Backend
 cd backend
-cp .env.example .env           # jeśli jeszcze nie istnieje
+cp .env.example .env
 npm install
-npx prisma migrate deploy      # zaaplikuj istniejącą migrację
-npm run prisma:seed            # opcjonalnie — 3 projekty, 6 pracowników, 17 wpisów godzin
-npm run start:dev
+npx prisma migrate deploy   # gotowa migracja init
+npm run prisma:seed         # opcjonalnie — dane demo
+npm run start:dev           # http://localhost:4000/api
+
+# 3) Frontend
+cd frontend
+cp .env.example .env.local
+npm install
+npm run dev                 # http://localhost:3000
 ```
 
-API słucha na `http://localhost:4000/api`.
+Reset bazy do zera: `docker compose down -v && docker compose up -d`, potem znowu `migrate deploy` + `prisma:seed`.
 
-### 3. Frontend
+Testy:
 
 ```bash
-cd frontend
-cp .env.example .env.local     # jeśli jeszcze nie istnieje
-npm install
-npm run dev
+cd backend && npm test    # 16 testów na EmployeesService
 ```
-
-UI dostępne pod `http://localhost:3000`.
 
 ## Model domeny
 
 ```
-Project  ←──┬─ Employee  ──── TimeEntry
-            │
-            └─ TimeEntry (FK do projektu w momencie wpisu)
+Project  ─┬─ Employee ─── TimeEntry
+          │
+          └─ TimeEntry  (FK do projektu w momencie wpisu)
 
-AuditLog (entity, entityId, action, changes JSON, createdAt)
+AuditLog  (niezależna tabela historii)
 ```
 
-- **Project** — `name` (unique), `client`, `budget` (Decimal), `startDate`,
-  `endDate`, `status (ACTIVE | ARCHIVED)`, `deletedAt` (soft delete).
-- **Employee** — `firstName`, `lastName`, `email` (unique), `position`,
-  `projectId` (FK), `hourlyRate` (Decimal), `status (ACTIVE | INACTIVE |
-  ON_LEAVE)`, `deletedAt` (soft delete).
-- **TimeEntry** — `employeeId`, `projectId` (snapshot z momentu wpisu),
-  `date`, `hours` (Decimal), `description`.
-- **AuditLog** — historia zmian wszystkich encji (CREATE/UPDATE/DELETE z
-  diffem before/after w JSON).
+Wszystkie encje poza `TimeEntry` mają `deletedAt` (soft delete). Stawki, godziny i budżety idą jako `Decimal` — przy mnożeniu używam `Prisma.Decimal`, bo nie chciałem gubić groszy na floatach.
 
-Statusy są enumami w bazie i typach. Stawki, budżety i godziny trzymane są
-jako `Decimal` żeby nie tracić groszy/dziesiętnych podczas mnożenia.
+| Tabela     | Co trzyma                                                                                          |
+|------------|----------------------------------------------------------------------------------------------------|
+| `Project`  | nazwa (unique), klient, budżet, daty start/end, status (ACTIVE/ARCHIVED), `deletedAt`              |
+| `Employee` | imię, nazwisko, email (unique), stanowisko, `projectId` (FK), stawka, status, `deletedAt`          |
+| `TimeEntry`| `employeeId`, `projectId`, data, godziny, opis                                                     |
+| `AuditLog` | entity, entityId, action (CREATE/UPDATE/DELETE), `changes` JSON, `createdAt`                       |
 
-## Endpointy
+## API
 
-Wszystkie listy zwracają kopertę paginacji `{ data, page, limit, total,
-totalPages }`. Lista akceptuje `?page=`, `?limit=` (max 100) i `?sort=` (np.
-`?sort=hourlyRate:desc`) — pole sortowania jest whitelistowane per endpoint.
+Wszystkie listy zwracają kopertę paginacji `{ data, page, limit, total, totalPages }`. Domyślnie `page=1`, `limit=20` (max 100). Sortowanie przez `?sort=pole:asc|desc` — pole jest whitelistowane per endpoint (żeby nie dało się np. sortować po hashu hasła, gdyby kiedyś taki dorzucić).
 
 ### Pracownicy
 
-| Metoda | Ścieżka                                              | Opis |
-|--------|------------------------------------------------------|------|
-| GET    | `/api/employees`                                     | Lista. Filtry: `?projectId=`, `?status=`. Nieaktywne (soft-deleted) są ukryte. |
-| GET    | `/api/employees/:id`                                 | Pojedynczy pracownik (404 dla soft-deleted). |
-| POST   | `/api/employees`                                     | Tworzenie. 409 przy zduplikowanym `email`. |
-| PATCH  | `/api/employees/:id`                                 | Częściowa aktualizacja (audit zapisuje diff). |
-| DELETE | `/api/employees/:id`                                 | Soft delete (`deletedAt`). |
-| GET    | `/api/employees/summary?projectId=X&from=&to=`       | Sumaryczny koszt projektu z `TimeEntry` × `hourlyRate`. `from`/`to` opcjonalne. |
+| Metoda | Ścieżka                                          | Uwagi                                                                  |
+|--------|--------------------------------------------------|------------------------------------------------------------------------|
+| GET    | `/api/employees`                                 | filtry: `?projectId=`, `?status=`. Soft-deleted ukryte.                |
+| GET    | `/api/employees/:id`                             | 404 jeśli brak / soft-deleted.                                         |
+| POST   | `/api/employees`                                 | 409 przy duplikacie emaila, 400 jeśli `projectId` nie istnieje.        |
+| PATCH  | `/api/employees/:id`                             | częściowy update; audit zapisuje diff zmienionych pól.                 |
+| DELETE | `/api/employees/:id`                             | soft delete — ustawia `deletedAt`.                                     |
+| GET    | `/api/employees/summary?projectId=X&from=&to=`   | suma godzin × stawki z `TimeEntry`, opcjonalny zakres dat.             |
 
 ### Projekty
 
-| Metoda | Ścieżka                | Opis |
-|--------|------------------------|------|
-| GET    | `/api/projects`        | Lista. Filtr `?status=`. Soft-deleted ukryte. |
-| GET    | `/api/projects/:id`    | Pojedynczy. |
-| POST   | `/api/projects`        | Tworzenie. 409 przy zduplikowanej nazwie. |
-| PATCH  | `/api/projects/:id`    | Częściowa aktualizacja. |
-| DELETE | `/api/projects/:id`    | Soft delete. |
+| Metoda | Ścieżka              | Uwagi                                                  |
+|--------|----------------------|--------------------------------------------------------|
+| GET    | `/api/projects`      | filtr `?status=`, paginacja, sort whitelist.           |
+| POST   | `/api/projects`      | 409 przy duplikacie `name`.                            |
+| PATCH  | `/api/projects/:id`  | częściowy update.                                      |
+| DELETE | `/api/projects/:id`  | soft delete.                                           |
 
 ### Wpisy godzin
 
-| Metoda | Ścieżka                                      | Opis |
-|--------|----------------------------------------------|------|
-| GET    | `/api/time-entries`                          | Lista. Filtry: `?employeeId=`, `?projectId=`, `?from=`, `?to=`. |
-| POST   | `/api/time-entries`                          | Dodanie. `projectId` brany z aktualnego projektu pracownika. |
-| DELETE | `/api/time-entries/:id`                      | Twardy delete (z audit logiem). |
+| Metoda | Ścieżka                  | Uwagi                                                                      |
+|--------|--------------------------|----------------------------------------------------------------------------|
+| GET    | `/api/time-entries`      | filtry: `?employeeId=`, `?projectId=`, `?from=`, `?to=`.                   |
+| POST   | `/api/time-entries`      | `projectId` snapshotuję z aktualnego projektu pracownika.                  |
+| DELETE | `/api/time-entries/:id`  | twardy delete, ale i tak ląduje w audit logu.                              |
 
 ### Audit log
 
-| Metoda | Ścieżka                                          | Opis |
-|--------|--------------------------------------------------|------|
-| GET    | `/api/audit-log?entity=&entityId=&action=`       | Lista zmian, najnowsze na górze. |
+| Metoda | Ścieżka                                       | Uwagi                                  |
+|--------|-----------------------------------------------|----------------------------------------|
+| GET    | `/api/audit-log?entity=&entityId=&action=`    | najnowsze na górze.                    |
 
-### Przykład: response z `/employees/summary`
+Przykład response z summary:
 
 ```json
 {
@@ -160,86 +139,62 @@ totalPages }`. Lista akceptuje `?page=`, `?limit=` (max 100) i `?sort=` (np.
 }
 ```
 
+## Frontend
+
+Trzy strony pod wspólnym headerem z nawigacją:
+
+- **`/` Employees** — tabela z sortowaniem po nagłówkach (klikam na „Name", „Rate / h", „Status"), filtrami po projekcie i statusie, paginacją. Pod filtrami karta **Project cost summary** z opcjonalnym zakresem dat (`from`/`to`) — pokazuje się po wybraniu projektu. Tworzenie/edycja/usuwanie w modalu. Email + projekt z dropdowna.
+- **`/projects` Projects** — pełen CRUD projektów: nazwa, klient, budżet, daty, status. Sort + paginacja.
+- **`/time-entries` Time entries** — lista wpisów z filtrami (projekt, pracownik, zakres dat). Dodawanie przez modal, usuwanie z confirm.
+
+Każda mutacja idzie przez SWR:
+
+- `optimisticData` — cache aktualizuje się natychmiast, UI nie czeka na backend,
+- `rollbackOnError` — rollback, jak coś pójdzie nie tak (np. 409 na duplikat emaila),
+- `revalidate: true` — po sukcesie odświeżam z serwera, żeby mieć stan kanoniczny.
+
+Po każdej mutacji invaliduję też klucze `summary`, żeby karta kosztu od razu pokazała aktualną kwotę.
+
+## Podjęte decyzje
+
+- **Jedna migracja `init`** zawiera komplet schema (5 tabel + 3 enumy). Pierwotny MVP miał swój własny `init`, ale po reworku po prostu wyrzuciłem starą migrację — i tak nie było danych produkcyjnych, a klejenie ALTER-ów dla projektu rekrutacyjnego to overengineering.
+- **`TimeEntry` ma własny `projectId`** (snapshot). Jakby pracownik kiedyś zmienił projekt, stare wpisy nadal liczą się do projektu, w którym powstawały. Bez tego summary historyczne by się rozjeżdżały.
+- **`hourlyRate` nie jest snapshotowane na `TimeEntry`** — używam aktualnej stawki. To świadoma decyzja w zakresie zadania; gdyby trzeba było historycznej dokładności kosztu, dodałbym `rateSnapshot` na `TimeEntry` (jest w sekcji „co bym dorobił").
+- **Soft delete jako `deletedAt`**, filtrowany w każdej liście serwisu, indeksowany osobnym indeksem. Audit log w momencie DELETE zapisuje pełny snapshot tuż przed ukryciem.
+- **Audit log strategia diffa** — CREATE zapisuje pełen snapshot w `after`, UPDATE tylko zmienione pola (before/after), DELETE pełny stan w `before`. JSON, więc proste do wyszukiwania.
+- **Pagination + sort whitelist są wspólne** (`common/pagination/`). Każdy serwis sam deklaruje, po jakich polach wolno sortować. To samo dla limitu paginacji (max 100, walidowane).
+- **Email lowercase + trim**, podobnie pozostałe stringi (`firstName`, `lastName`, `position`, `project.name`). Walidacja przez `IsEmail()` od razu w DTO; konflikt unikalności łapię w try/catch wokół `prisma.create/update` i mapuję `P2002` → `ConflictException` z konkretnym komunikatem.
+- **Brak autoryzacji**, CORS otwarty na `http://localhost:3000` — w briefie nie było wymagane, a nie chciałem dokładać tematów bez wartości dla recenzji.
+
 ## Testy
 
-```bash
-cd backend
-npm test
-```
+16 testów jednostkowych na `EmployeesService` — najważniejszą logikę staram się trzymać czystą, więc testy nie potrzebują realnej bazy. Pokrywają:
 
-16 testów jednostkowych w `EmployeesService` pokrywających:
+- czystą funkcję `calculateSummary` — precyzja `Decimal`, deduplikacja pracowników, akceptacja `string|number|Decimal` jako stawki, forward zakresu dat,
+- `list` z paginacją (`skip`/`take`), filtrami i defaultowym vs whitelistowanym sortowaniem,
+- `findOne` rzucające `NotFoundException` dla nieistniejących/soft-deleted,
+- `create` — trim, lowercase emaila, sprawdzenie projektu, audit zapisany,
+- `update` — krótkie zwarcie jeśli brak rekordu, zmiana projektu wymaga walidacji nowego `projectId`,
+- `remove` — soft delete (`deletedAt = new Date()`) zamiast hard delete + audit,
+- `projectSummary` — 404 dla nieistniejącego projektu, 400 jeśli `from > to`, prawidłowa agregacja po `TimeEntry` z join do `Employee.hourlyRate`, pominięcie filtra dat jeśli `from`/`to` puste.
 
-- czystą funkcję `calculateSummary` (precyzja `Decimal`, deduplikacja
-  pracowników, zakres dat),
-- `list` z paginacją, filtrami i sortowaniem (whitelist),
-- soft delete + audit (wszystkie mutacje zapisują wpis w `AuditLog`),
-- email unique → `ConflictException`,
-- validacja zakresu `from > to` → `BadRequestException`,
-- `projectSummary` skleja `TimeEntry` z `Employee.hourlyRate` przy
-  uwzględnieniu daty i flagi soft delete.
+Frontu nie testuję — dla zakresu zadania uznałem to za niepotrzebne (build i ręczna sesja w przeglądarce wystarczają).
 
-Frontend nie ma testów — zakres zadania.
+## Plany na dalszą implementację
 
-## Założenia projektowe
+Po implementacji punktów z poprzedniej listy doszły mi nowe pomysły:
 
-- **Pojedyncza migracja `init`** zawiera komplet schema (5 tabel + 3 enumy).
-  Reviewer dostaje `prisma migrate deploy` + `prisma:seed` i ma gotowe
-  środowisko.
-- **`hourlyRate` i `hours` w `Decimal`** — mnożenie kosztów idzie przez
-  `Prisma.Decimal`, wynik konwertujemy na `number` z dwoma miejscami po
-  przecinku dopiero w response.
-- **`TimeEntry` ma własny `projectId`** (snapshot). Jeśli pracownik zmieni
-  projekt, stare wpisy nadal liczone są do projektu, na który były wpisywane.
-- **Soft delete** ukrywa rekord przez `deletedAt IS NOT NULL` we wszystkich
-  domyślnych zapytaniach i indeksowane jest osobnym indeksem.
-- **Audit log** pisze CREATE pełny snapshot, UPDATE tylko diff zmienionych
-  pól, DELETE pełny snapshot ostatniego stanu (włącznie z `deletedAt`).
-- **Pagination + sorting** są wspólną biblioteką w `common/pagination/`. Sort
-  whitelistowany per service żeby nie dało się sortować po wrażliwych
-  kolumnach.
-- **SWR + optymistyczne mutacje** — każdy create/update/delete na froncie
-  natychmiast aktualizuje cache (`optimisticData`), w razie błędu robi
-  rollback (`rollbackOnError`), a po sukcesie wymusza revalidation z
-  serwera. Sumaryczna karta projektu jest invalidowana po każdej mutacji
-  pracownika/wpisu godzin.
-- **Brak autoryzacji, CORS otwarty na `localhost:3000`** — zgodne z briefem.
-
-## Co dorobiłbym dalej (kolejna iteracja)
-
-Lista bieżących TODO-w jakie zostawiłbym właścicielowi produktu po tym
-sprincie:
-
-- **Autoryzacja i role** — JWT lub sesja z RBAC (admin, manager, employee).
-  `userId` powinien też trafiać do `AuditLog.changes` zamiast bezimiennego
-  zapisu.
-- **Self-service ewidencji czasu** — pracownik widzi i edytuje **tylko**
-  swoje wpisy, manager akceptuje (`status: PENDING | APPROVED | REJECTED`).
-- **Snapshot `hourlyRate` na `TimeEntry`** — żeby zmiana stawki w przyszłości
-  nie zmieniała historycznych kosztów (obecnie używamy aktualnej stawki).
-- **Wynagrodzenia, marża, fakturowanie** — `BillableRate` na poziomie projektu
-  (co klient płaci) vs `hourlyRate` (co kosztuje pracownik); raport marży i
-  generowanie faktur PDF.
-- **Webhooki i export** — wywołania na zewnątrz przy zmianach (`employee.created`)
-  i export CSV/XLSX z listy + summary.
-- **Reporting layer** — materializowane widoki dla kosztu projektu w
-  zakresach dat (rok / kwartał / tydzień), żeby `summary` nie liczyło ad-hoc
-  przy każdym odświeżeniu.
-- **Frontend** — globalna nawigacja per projekt (drilldown z listy projektów
-  do pracowników i ewidencji godzin filtrowanej tym projektem), wykresy
-  (Recharts), bulk-edit, multi-select w tabeli.
-- **Walidacja overlapu czasu pracy** — nie można zarejestrować > 24h dziennie
-  per pracownik (na poziomie agregatu, nie pojedynczego wpisu).
-- **i18n + lokalizacja walut** — UI po polsku/angielsku, projekty mogą mieć
-  walutę inną niż PLN.
-- **Testy** — supertest e2e na realnym `NestApplication` z testową bazą +
-  Playwright na ścieżce „dodaj projekt → dodaj pracownika → dodaj wpis →
-  sprawdź summary".
-- **CI + observability** — GitHub Actions (lint + test + build), strukturalne
-  logi (pino), Sentry, metryki Prometheus + dashboard Grafana.
-- **Konteneryzacja całości** — Dockerfile dla backendu/frontu, `docker-compose
-  up` startuje cały stack jednym poleceniem.
-- **Migracje produkcyjne** — `prisma migrate deploy` z osobnym kontem DB o
-  ograniczonych uprawnieniach; rollback strategy dla nieodwracalnych zmian
-  (kopia tabel + feature flag).
-- **Retencja audit-loga** — partycjonowanie po `createdAt`, automatyczna
-  archiwizacja starszych wpisów do S3.
+- **Autoryzacja + RBAC** — JWT/sesja, role (admin / manager / employee). `userId` powinien też lecieć do `AuditLog.changes` zamiast bezimiennego zapisu.
+- **Self-service ewidencji** — pracownik widzi i edytuje **tylko** swoje wpisy, manager akceptuje (`status: PENDING / APPROVED / REJECTED`).
+- **Snapshot stawki na `TimeEntry`** — żeby zmiana `hourlyRate` w przyszłości nie zmieniała historycznych kosztów. Obecnie biorę aktualną stawkę.
+- **Billable rate vs cost rate** — `Project.billableRate` (co klient płaci) i `Employee.hourlyRate` (co kosztuje). Raport marży, generowanie faktur PDF.
+- **Walidacja overlapu** — nie więcej niż 24h dziennie per pracownik (na agregacie, nie pojedynczym wpisie).
+- **Reporting layer** — materializowane widoki kosztu projektu w zakresach (tydzień / kwartał / rok) zamiast ad-hoc agregacji w `summary`.
+- **Frontend UX** — wykresy (Recharts), bulk-edit/multi-select w tabeli, drilldown z karty projektu wprost do pracowników i wpisów filtrowanych tym projektem.
+- **Webhooki + export** — eventy w stylu `employee.created`, export CSV/XLSX z list i summary.
+- **i18n + waluty per projekt** — UI po pl/en, projekt może mieć walutę inną niż PLN.
+- **Testy** — supertest e2e na realnym `NestApplication` z testową bazą + Playwright na ścieżce „dodaj projekt → dodaj pracownika → dodaj wpis → sprawdź summary".
+- **CI/CD + observability** — GitHub Actions (lint + test + build), pino, Sentry, Prometheus + dashboard Grafana.
+- **Dockerfile dla backendu i frontu** — żeby cały stack startował jednym `docker compose up`.
+- **Retencja audit-loga** — partycjonowanie po `createdAt`, archiwizacja starszych do S3.
+- **Migracje prod** — `prisma migrate deploy` z osobnym kontem o ograniczonych uprawnieniach, plan rollbacku dla nieodwracalnych zmian (kopia tabel + feature flag).
