@@ -21,6 +21,8 @@ export default function EmployeesPage() {
   const [statusFilter, setStatusFilter] = useState<EmployeeStatus | ''>('');
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState('lastName:asc');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
@@ -37,6 +39,8 @@ export default function EmployeesPage() {
   const projectsQuery = useAllProjects();
   const summaryQuery = useProjectSummary({
     projectId: projectFilter || null,
+    from: from || undefined,
+    to: to || undefined,
   });
   const invalidate = useInvalidate();
 
@@ -160,6 +164,14 @@ export default function EmployeesPage() {
         loading={summaryQuery.isLoading}
         error={summaryQuery.error ? String(summaryQuery.error.message ?? summaryQuery.error) : null}
         summary={summaryQuery.data ?? null}
+        from={from}
+        to={to}
+        onFromChange={setFrom}
+        onToChange={setTo}
+        onClear={() => {
+          setFrom('');
+          setTo('');
+        }}
       />
 
       {employeesQuery.error && (
