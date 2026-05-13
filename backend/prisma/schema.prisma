@@ -13,18 +13,80 @@ enum EmployeeStatus {
   ON_LEAVE
 }
 
-model Employee {
-  id          String         @id @default(uuid())
-  firstName   String
-  lastName    String
-  position    String
-  project     String
-  hourlyRate  Decimal        @db.Decimal(10, 2)
-  hoursWorked Int            @default(0)
-  status      EmployeeStatus @default(ACTIVE)
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+}
 
-  @@index([project])
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+model Project {
+  id        String        @id @default(uuid())
+  name      String        @unique
+  client    String?
+  budget    Decimal?      @db.Decimal(12, 2)
+  startDate DateTime?     @db.Date
+  endDate   DateTime?     @db.Date
+  status    ProjectStatus @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  deletedAt DateTime?
+
+  employees   Employee[]
+  timeEntries TimeEntry[]
+
   @@index([status])
+  @@index([deletedAt])
+}
+
+model Employee {
+  id         String         @id @default(uuid())
+  firstName  String
+  lastName   String
+  email      String         @unique
+  position   String
+  projectId  String
+  project    Project        @relation(fields: [projectId], references: [id])
+  hourlyRate Decimal        @db.Decimal(10, 2)
+  status     EmployeeStatus @default(ACTIVE)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  deletedAt  DateTime?
+
+  timeEntries TimeEntry[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([deletedAt])
+}
+
+model TimeEntry {
+  id          String   @id @default(uuid())
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id])
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id])
+  date        DateTime @db.Date
+  hours       Decimal  @db.Decimal(5, 2)
+  description String?
+  createdAt   DateTime @default(now())
+
+  @@index([employeeId, date])
+  @@index([projectId, date])
+}
+
+model AuditLog {
+  id        String      @id @default(uuid())
+  entity    String
+  entityId  String
+  action    AuditAction
+  changes   Json
+  createdAt DateTime    @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
 }
