@@ -1,4 +1,4 @@
-# WorkFlex — pracownicy, projekty i ewidencja godzin
+# WorkFlex projekt — pracownicy, projekty i ewidencja godzin
 
 ## Stack
 
@@ -168,7 +168,7 @@ Po każdej mutacji invaliduję też klucze `summary`, żeby karta kosztu od razu
 
 ## Testy
 
-16 testów jednostkowych na `EmployeesService` — najważniejszą logikę staram się trzymać czystą, więc testy nie potrzebują realnej bazy. Pokrywają:
+16 testów jednostkowych na `EmployeesService` - pokrywają:
 
 - czystą funkcję `calculateSummary` — precyzja `Decimal`, deduplikacja pracowników, akceptacja `string|number|Decimal` jako stawki, forward zakresu dat,
 - `list` z paginacją (`skip`/`take`), filtrami i defaultowym vs whitelistowanym sortowaniem,
@@ -178,11 +178,8 @@ Po każdej mutacji invaliduję też klucze `summary`, żeby karta kosztu od razu
 - `remove` — soft delete (`deletedAt = new Date()`) zamiast hard delete + audit,
 - `projectSummary` — 404 dla nieistniejącego projektu, 400 jeśli `from > to`, prawidłowa agregacja po `TimeEntry` z join do `Employee.hourlyRate`, pominięcie filtra dat jeśli `from`/`to` puste.
 
-Frontu nie testuję — dla zakresu zadania uznałem to za niepotrzebne (build i ręczna sesja w przeglądarce wystarczają).
 
 ## Plany na dalszą implementację
-
-Po implementacji punktów z poprzedniej listy doszły mi nowe pomysły:
 
 - **Autoryzacja + RBAC** — JWT/sesja, role (admin / manager / employee). `userId` powinien też lecieć do `AuditLog.changes` zamiast bezimiennego zapisu.
 - **Self-service ewidencji** — pracownik widzi i edytuje **tylko** swoje wpisy, manager akceptuje (`status: PENDING / APPROVED / REJECTED`).
