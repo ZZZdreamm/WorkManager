@@ -161,14 +161,77 @@ export class EmployeesService {
     if (!project) {
       throw new NotFoundException(`Project ${query.projectId} not found`);
     }
+
+    const fromDate = query.from ? new Date(query.from) : null;
+    const toDate = query.to ? new Date(query.to) : null;
+    if (fromDate && toDate && fromDate > toDate) {
+      throw new BadRequestException('`from` must be earlier than `to`.');
+    }
+
+    const dateWhere: Prisma.DateTimeFilter = {};
+    if (fromDate) dateWhere.gte = fromDate;
+    if (toDate) dateWhere.lte = toDate;
+
+    const entries = await this.prisma.timeEntry.findMany({
+      where: {
+        projectId: query.projectId,
+        ...(fromDate || toDate ? { date: dateWhere } : {}),
+        employee: { deletedAt: null },
+      },
+      select: {
+        hours: true,
+        employee: { select: { id: true, hourlyRate: true } },
+      },
+    });
+
+    const employeeIds = new Set<string>();
+    let totalHours = new Prisma.Decimal(0);
+    let totalCost = new Prisma.Decimal(0);
+    for (const entry of entries) {
+      employeeIds.add(entry.employee.id);
+      const hours = new Prisma.Decimal(entry.hours);
+      totalHours = totalHours.plus(hours);
+      totalCost = totalCost.plus(hours.mul(entry.employee.hourlyRate));
+    }
+
     return {
       projectId: project.id,
       projectName: project.name,
-      from: query.from ?? null,
-      to: query.to ?? null,
-      employeeCount: 0,
-      totalHours: 0,
-      totalCost: 0,
+      from: fromDate ? fromDate.toISOString().slice(0, 10) : null,
+      to: toDate ? toDate.toISOString().slice(0, 10) : null,
+      employeeCount: employeeIds.size,
+      totalHours: Number(totalHours.toFixed(2)),
+      totalCost: Number(totalCost.toFixed(2)),
+    };
+  }
+
+  static calculateSummary(
+    project: { id: string; name: string },
+    entries: Array<{
+      hours: Prisma.Decimal | string | number;
+      employee: { id: string; hourlyRate: Prisma.Decimal | string | number };
+    }>,
+    range: { from?: string | null; to?: string | null } = {},
+  ): ProjectSummary {
+    const employeeIds = new Set<string>();
+    let totalHours = new Prisma.Decimal(0);
+    let totalCost = new Prisma.Decimal(0);
+    for (const entry of entries) {
+      employeeIds.add(entry.employee.id);
+      const hours = new Prisma.Decimal(entry.hours as Prisma.Decimal);
+      totalHours = totalHours.plus(hours);
+      totalCost = totalCost.plus(
+        hours.mul(new Prisma.Decimal(entry.employee.hourlyRate as Prisma.Decimal)),
+      );
+    }
+    return {
+      projectId: project.id,
+      projectName: project.name,
+      from: range.from ?? null,
+      to: range.to ?? null,
+      employeeCount: employeeIds.size,
+      totalHours: Number(totalHours.toFixed(2)),
+      totalCost: Number(totalCost.toFixed(2)),
     };
   }
 
