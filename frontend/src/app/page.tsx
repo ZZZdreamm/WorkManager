@@ -1,109 +1,92 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { employeesApi } from '@/lib/api';
+import { useEmployees, useAllProjects, useProjectSummary, useInvalidate } from '@/lib/hooks';
 import type {
   Employee,
   EmployeePayload,
   EmployeeStatus,
-  ProjectSummary,
+  Paginated,
 } from '@/types/employee';
 import { Filters } from '@/components/Filters';
 import { EmployeesTable } from '@/components/EmployeesTable';
 import { Modal } from '@/components/Modal';
 import { EmployeeForm } from '@/components/EmployeeForm';
 import { ProjectSummaryCard } from '@/components/ProjectSummaryCard';
+import { Pagination } from '@/components/Pagination';
 
 export default function EmployeesPage() {
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [listError, setListError] = useState<string | null>(null);
-
   const [projectFilter, setProjectFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<EmployeeStatus | ''>('');
+  const [page, setPage] = useState(1);
+  const [sort, setSort] = useState('lastName:asc');
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
 
-  const [summary, setSummary] = useState<ProjectSummary | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const filters = {
+    projectId: projectFilter || undefined,
+    status: statusFilter || undefined,
+    page,
+    limit: 10,
+    sort,
+  };
 
-  const loadEmployees = useCallback(async () => {
-    setLoading(true);
-    setListError(null);
-    try {
-      const data = await employeesApi.list({
-        project: projectFilter || undefined,
-        status: statusFilter || undefined,
-      });
-      setEmployees(data);
-    } catch (err) {
-      setListError(err instanceof Error ? err.message : 'Failed to load employees.');
-    } finally {
-      setLoading(false);
-    }
-  }, [projectFilter, statusFilter]);
+  const employeesQuery = useEmployees(filters);
+  const projectsQuery = useAllProjects();
+  const summaryQuery = useProjectSummary({
+    projectId: projectFilter || null,
+  });
+  const invalidate = useInvalidate();
 
-  useEffect(() => {
-    void loadEmployees();
-  }, [loadEmployees]);
+  const employees = employeesQuery.data?.data ?? [];
+  const projects = projectsQuery.data?.data ?? [];
 
-  useEffect(() => {
-    if (!projectFilter) {
-      setSummary(null);
-      setSummaryError(null);
-      return;
-    }
-    let cancelled = false;
-    setSummaryLoading(true);
-    setSummaryError(null);
-    employeesApi
-      .summary(projectFilter)
-      .then((data) => {
-        if (!cancelled) setSummary(data);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setSummaryError(
-            err instanceof Error ? err.message : 'Failed to load summary.',
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setSummaryLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectFilter, employees]);
-
-  const projects = useMemo(() => {
-    const set = new Set<string>();
-    for (const e of employees) set.add(e.project);
-    return Array.from(set).sort();
-  }, [employees]);
-
-  const openCreate = () => {
+  function openCreate() {
     setEditing(null);
     setFormOpen(true);
-  };
+  }
 
-  const openEdit = (employee: Employee) => {
+  function openEdit(employee: Employee) {
     setEditing(employee);
     setFormOpen(true);
-  };
-
-  const closeForm = () => setFormOpen(false);
+  }
 
   async function handleSubmit(payload: EmployeePayload) {
     if (editing) {
-      await employeesApi.update(editing.id, payload);
+      const optimistic: Paginated<Employee> | undefined = employeesQuery.data
+        ? {
+            ...employeesQuery.data,
+            data: employeesQuery.data.data.map((e) =>
+              e.id === editing.id
+                ? {
+                    ...e,
+                    ...payload,
+                    hourlyRate: String(payload.hourlyRate),
+                    project:
+                      projects.find((p) => p.id === payload.projectId) ??
+                      e.project,
+                  }
+                : e,
+            ),
+          }
+        : undefined;
+      await employeesQuery.mutate(
+        employeesApi.update(editing.id, payload).then(() => optimistic),
+        {
+          optimisticData: optimistic,
+          rollbackOnError: true,
+          populateCache: false,
+          revalidate: true,
+        },
+      );
     } else {
       await employeesApi.create(payload);
+      await employeesQuery.mutate();
     }
     setFormOpen(false);
-    await loadEmployees();
+    await invalidate('summary');
   }
 
   async function handleDelete(employee: Employee) {
@@ -111,9 +94,24 @@ export default function EmployeesPage() {
       `Delete ${employee.firstName} ${employee.lastName}?`,
     );
     if (!ok) return;
+    const optimistic: Paginated<Employee> | undefined = employeesQuery.data
+      ? {
+          ...employeesQuery.data,
+          total: Math.max(0, employeesQuery.data.total - 1),
+          data: employeesQuery.data.data.filter((e) => e.id !== employee.id),
+        }
+      : undefined;
     try {
-      await employeesApi.remove(employee.id);
-      await loadEmployees();
+      await employeesQuery.mutate(
+        employeesApi.remove(employee.id).then(() => optimistic),
+        {
+          optimisticData: optimistic,
+          rollbackOnError: true,
+          populateCache: false,
+          revalidate: true,
+        },
+      );
+      await invalidate('summary');
     } catch (err) {
       window.alert(err instanceof Error ? err.message : 'Failed to delete.');
     }
@@ -131,56 +129,82 @@ export default function EmployeesPage() {
         <button
           type="button"
           onClick={openCreate}
-          className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          disabled={projects.length === 0}
+          className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+          title={projects.length === 0 ? 'Create a project first' : ''}
         >
           + New employee
         </button>
       </div>
 
       <Filters
-        project={projectFilter}
+        projectId={projectFilter}
         status={statusFilter}
         projects={projects}
-        onProjectChange={setProjectFilter}
-        onStatusChange={setStatusFilter}
+        onProjectChange={(value) => {
+          setProjectFilter(value);
+          setPage(1);
+        }}
+        onStatusChange={(value) => {
+          setStatusFilter(value);
+          setPage(1);
+        }}
         onReset={() => {
           setProjectFilter('');
           setStatusFilter('');
+          setPage(1);
         }}
       />
 
       <ProjectSummaryCard
-        loading={summaryLoading}
-        error={summaryError}
-        summary={summary}
+        loading={summaryQuery.isLoading}
+        error={summaryQuery.error ? String(summaryQuery.error.message ?? summaryQuery.error) : null}
+        summary={summaryQuery.data ?? null}
       />
 
-      {listError && (
+      {employeesQuery.error && (
         <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {listError}
+          {String(employeesQuery.error.message ?? employeesQuery.error)}
         </p>
       )}
 
-      {loading ? (
+      {employeesQuery.isLoading && !employeesQuery.data ? (
         <div className="rounded-lg border border-gray-200 bg-white p-10 text-center text-sm text-gray-500">
           Loading…
         </div>
       ) : (
-        <EmployeesTable
-          employees={employees}
-          onEdit={openEdit}
-          onDelete={handleDelete}
-        />
+        <>
+          <EmployeesTable
+            employees={employees}
+            sort={sort}
+            onSortChange={(s) => {
+              setSort(s);
+              setPage(1);
+            }}
+            onEdit={openEdit}
+            onDelete={handleDelete}
+          />
+          {employeesQuery.data && (
+            <Pagination
+              page={employeesQuery.data.page}
+              totalPages={employeesQuery.data.totalPages}
+              total={employeesQuery.data.total}
+              limit={employeesQuery.data.limit}
+              onPageChange={setPage}
+            />
+          )}
+        </>
       )}
 
       <Modal
         open={formOpen}
         title={editing ? 'Edit employee' : 'New employee'}
-        onClose={closeForm}
+        onClose={() => setFormOpen(false)}
       >
         <EmployeeForm
           initial={editing}
-          onCancel={closeForm}
+          projects={projects}
+          onCancel={() => setFormOpen(false)}
           onSubmit={handleSubmit}
         />
       </Modal>

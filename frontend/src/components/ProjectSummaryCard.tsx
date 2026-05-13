@@ -31,7 +31,7 @@ export function ProjectSummaryCard({ loading, error, summary }: Props) {
         <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
           <div>
             <div className="text-xs text-gray-500">Project</div>
-            <div className="font-medium">{summary.project}</div>
+            <div className="font-medium">{summary.projectName}</div>
           </div>
           <div>
             <div className="text-xs text-gray-500">Employees</div>

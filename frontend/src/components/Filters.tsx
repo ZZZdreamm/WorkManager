@@ -1,25 +1,30 @@
 'use client';
 
-import { EMPLOYEE_STATUSES, EmployeeStatus, STATUS_LABELS } from '@/types/employee';
+import {
+  EMPLOYEE_STATUSES,
+  EmployeeStatus,
+  STATUS_LABELS,
+  Project,
+} from '@/types/employee';
 
 interface Props {
-  project: string;
+  projectId: string;
   status: EmployeeStatus | '';
-  projects: string[];
+  projects: Project[];
   onProjectChange: (value: string) => void;
   onStatusChange: (value: EmployeeStatus | '') => void;
   onReset: () => void;
 }
 
 export function Filters({
-  project,
+  projectId,
   status,
   projects,
   onProjectChange,
   onStatusChange,
   onReset,
 }: Props) {
-  const hasFilters = project !== '' || status !== '';
+  const hasFilters = projectId !== '' || status !== '';
 
   return (
     <div className="flex flex-wrap items-end gap-3 rounded-lg border border-gray-200 bg-white p-4">
@@ -27,19 +32,19 @@ export function Filters({
         <label className="text-xs font-medium text-gray-500" htmlFor="filter-project">
           Project
         </label>
-        <input
+        <select
           id="filter-project"
-          list="project-suggestions"
-          value={project}
+          value={projectId}
           onChange={(e) => onProjectChange(e.target.value)}
-          placeholder="All projects"
-          className="mt-1 w-56 rounded border border-gray-300 bg-white px-3 py-1.5 text-sm"
-        />
-        <datalist id="project-suggestions">
+          className="mt-1 w-64 rounded border border-gray-300 bg-white px-3 py-1.5 text-sm"
+        >
+          <option value="">All projects</option>
           {projects.map((p) => (
-            <option key={p} value={p} />
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
           ))}
-        </datalist>
+        </select>
       </div>
 
       <div className="flex flex-col">

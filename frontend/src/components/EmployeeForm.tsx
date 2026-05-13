@@ -1,11 +1,17 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import type { Employee, EmployeePayload, EmployeeStatus } from '@/types/employee';
+import type {
+  Employee,
+  EmployeePayload,
+  EmployeeStatus,
+  Project,
+} from '@/types/employee';
 import { EMPLOYEE_STATUSES, STATUS_LABELS } from '@/types/employee';
 
 interface Props {
   initial?: Employee | null;
+  projects: Project[];
   onCancel: () => void;
   onSubmit: (payload: EmployeePayload) => Promise<void>;
 }
@@ -13,46 +19,48 @@ interface Props {
 interface FormState {
   firstName: string;
   lastName: string;
+  email: string;
   position: string;
-  project: string;
+  projectId: string;
   hourlyRate: string;
-  hoursWorked: string;
   status: EmployeeStatus;
 }
 
-const emptyForm: FormState = {
-  firstName: '',
-  lastName: '',
-  position: '',
-  project: '',
-  hourlyRate: '',
-  hoursWorked: '0',
-  status: 'ACTIVE',
-};
+function emptyForm(defaultProjectId = ''): FormState {
+  return {
+    firstName: '',
+    lastName: '',
+    email: '',
+    position: '',
+    projectId: defaultProjectId,
+    hourlyRate: '',
+    status: 'ACTIVE',
+  };
+}
 
 function fromEmployee(e: Employee): FormState {
   return {
     firstName: e.firstName,
     lastName: e.lastName,
+    email: e.email,
     position: e.position,
-    project: e.project,
+    projectId: e.projectId,
     hourlyRate: String(e.hourlyRate),
-    hoursWorked: String(e.hoursWorked),
     status: e.status,
   };
 }
 
-export function EmployeeForm({ initial, onCancel, onSubmit }: Props) {
+export function EmployeeForm({ initial, projects, onCancel, onSubmit }: Props) {
   const [form, setForm] = useState<FormState>(
-    initial ? fromEmployee(initial) : emptyForm,
+    initial ? fromEmployee(initial) : emptyForm(projects[0]?.id ?? ''),
   );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    setForm(initial ? fromEmployee(initial) : emptyForm);
+    setForm(initial ? fromEmployee(initial) : emptyForm(projects[0]?.id ?? ''));
     setError(null);
-  }, [initial]);
+  }, [initial, projects]);
 
   const update =
     <K extends keyof FormState>(key: K) =>
@@ -64,14 +72,12 @@ export function EmployeeForm({ initial, onCancel, onSubmit }: Props) {
     setError(null);
 
     const hourlyRate = Number(form.hourlyRate);
-    const hoursWorked = Number(form.hoursWorked);
-
     if (Number.isNaN(hourlyRate) || hourlyRate < 0) {
       setError('Hourly rate must be a non-negative number.');
       return;
     }
-    if (!Number.isInteger(hoursWorked) || hoursWorked < 0) {
-      setError('Hours worked must be a non-negative integer.');
+    if (!form.projectId) {
+      setError('Project is required.');
       return;
     }
 
@@ -80,10 +86,10 @@ export function EmployeeForm({ initial, onCancel, onSubmit }: Props) {
       await onSubmit({
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
+        email: form.email.trim(),
         position: form.position.trim(),
-        project: form.project.trim(),
+        projectId: form.projectId,
         hourlyRate,
-        hoursWorked,
         status: form.status,
       });
     } catch (err) {
@@ -116,6 +122,17 @@ export function EmployeeForm({ initial, onCancel, onSubmit }: Props) {
         </Field>
       </div>
 
+      <Field label="Email">
+        <input
+          required
+          type="email"
+          maxLength={160}
+          value={form.email}
+          onChange={(e) => update('email')(e.target.value)}
+          className="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"
+        />
+      </Field>
+
       <Field label="Position">
         <input
           required
@@ -127,13 +144,21 @@ export function EmployeeForm({ initial, onCancel, onSubmit }: Props) {
       </Field>
 
       <Field label="Project">
-        <input
+        <select
           required
-          maxLength={120}
-          value={form.project}
-          onChange={(e) => update('project')(e.target.value)}
+          value={form.projectId}
+          onChange={(e) => update('projectId')(e.target.value)}
           className="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"
-        />
+        >
+          <option value="" disabled>
+            Select a project…
+          </option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
       </Field>
 
       <div className="grid grid-cols-2 gap-3">
@@ -148,32 +173,20 @@ export function EmployeeForm({ initial, onCancel, onSubmit }: Props) {
             className="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"
           />
         </Field>
-        <Field label="Hours worked">
-          <input
-            required
-            type="number"
-            min="0"
-            step="1"
-            value={form.hoursWorked}
-            onChange={(e) => update('hoursWorked')(e.target.value)}
+        <Field label="Status">
+          <select
+            value={form.status}
+            onChange={(e) => update('status')(e.target.value as EmployeeStatus)}
             className="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"
-          />
+          >
+            {EMPLOYEE_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {STATUS_LABELS[s]}
+              </option>
+            ))}
+          </select>
         </Field>
       </div>
-
-      <Field label="Status">
-        <select
-          value={form.status}
-          onChange={(e) => update('status')(e.target.value as EmployeeStatus)}
-          className="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"
-        >
-          {EMPLOYEE_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {STATUS_LABELS[s]}
-            </option>
-          ))}
-        </select>
-      </Field>
 
       {error && (
         <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
